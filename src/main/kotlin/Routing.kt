@@ -7,6 +7,7 @@ import com.example.Data.CreateStaffRequest
 import com.example.Data.CreateTicketRequest
 import com.example.Data.LoginRequest
 import com.example.Data.Categories
+import com.example.Data.CreateGuestRequest
 import com.example.Data.Guests
 import com.example.Data.Staff
 import com.example.Data.Tickets
@@ -38,19 +39,18 @@ data class TicketResponse(
 )
 
 fun Application.configureRouting() {
-    // Конфигурация секретов для JWT (должна совпадать с той, что указана при install(Authentication))
     val jwtSecret = "super-secret-key-sochi-2026"
     val jwtIssuer = "http://0.0.0.0:8080/"
     val jwtAudience = "hotel-audience"
 
     routing {
-        // Проверка работоспособности (открытые ресурсы)
+        // Открытые эндпоинты (без авторизации)
         staticResources("/", "static", index = "login.html")
         get("/") {
             call.respondRedirect("/login.html")
         }
 
-        // Регистрация сотрудников (открытый эндпоинт, либо можешь перенести внутрь authenticate для админов)
+        // Регистрация сотрудников (открытый эндпоинт)
         post("/api/admin/staff") {
             try {
                 val body = call.receiveText()
@@ -68,7 +68,7 @@ fun Application.configureRouting() {
                 transaction {
                     Staff.insert {
                         it[username] = req.username
-                        it[passwordHash] = req.password // В продакшене обязательно хешируй!
+                        it[passwordHash] = req.password
                         it[role] = req.role
                     }
                 }
@@ -88,14 +88,12 @@ fun Application.configureRouting() {
                     val guest = Guests.select { Guests.phone eq req.identifier }.firstOrNull()
                     if (guest != null) {
                         val guestId = guest[Guests.id]
-                        // Генерируем токен для Гостя
                         val token = JWT.create()
                             .withAudience(jwtAudience)
                             .withIssuer(jwtIssuer)
                             .withClaim("userId", guestId)
                             .withClaim("role", "GUEST")
                             .sign(Algorithm.HMAC256(jwtSecret))
-
                         AuthResponse(token = token, role = "GUEST", guestId = guestId)
                     } else null
                 } else {
@@ -106,14 +104,12 @@ fun Application.configureRouting() {
                     if (staff != null) {
                         val staffId = staff[Staff.id]
                         val staffRole = staff[Staff.role]
-                        // Генерируем токен для Персонала/Админа
                         val token = JWT.create()
                             .withAudience(jwtAudience)
                             .withIssuer(jwtIssuer)
                             .withClaim("userId", staffId)
                             .withClaim("role", staffRole)
                             .sign(Algorithm.HMAC256(jwtSecret))
-
                         AuthResponse(token = token, role = staffRole, guestId = null)
                     } else null
                 }
@@ -131,10 +127,37 @@ fun Application.configureRouting() {
         // ==========================================================
         authenticate("auth-jwt") {
 
+            // Создание гостя (только для админов) - ПЕРЕМЕСТИТЕ СЮДА!
+            post("/api/admin/guests") {
+                val principal = call.principal<JWTPrincipal>()
+                val role = principal?.payload?.getClaim("role")?.asString()
+
+                if (role != "ADMIN") {
+                    return@post call.respond(HttpStatusCode.Forbidden, "Only admin can create guests")
+                }
+
+                try {
+                    val req = call.receive<CreateGuestRequest>()
+
+                    transaction {
+                        Guests.insert {
+                            it[fullName] = req.fullName
+                            it[phone] = req.phone
+                            it[roomNumber] = req.roomNumber
+                            it[isActive] = true
+                        }
+                    }
+
+                    call.respond(HttpStatusCode.Created, mapOf("message" to "Guest created successfully"))
+                } catch (e: Exception) {
+                    println("Error creating guest: ${e.message}")
+                    call.respond(HttpStatusCode.BadRequest, "Error: ${e.message}")
+                }
+            }
+
             // Создание заявки гостем
             post("/api/tickets") {
                 val principal = call.principal<JWTPrincipal>()
-                // Вытаскиваем ID гостя прямо из токена, безопасность 100%
                 val guestId = principal?.payload?.getClaim("userId")?.asInt()
                     ?: return@post call.respond(HttpStatusCode.Unauthorized, "Invalid token claims")
 
@@ -184,7 +207,7 @@ fun Application.configureRouting() {
                 val principal = call.principal<JWTPrincipal>()
                 val role = principal?.payload?.getClaim("role")?.asString()
 
-                if (role != "ADMIN" && role != "CLEANER" && role != "MASTER") {
+                if (role != "ADMIN" && role != "STAFF" && role != "CLEANER" && role != "MASTER") {
                     return@get call.respond(HttpStatusCode.Forbidden, "Only staff can view all tickets")
                 }
 
@@ -253,7 +276,7 @@ fun Application.configureRouting() {
                 }
             }
 
-            // Изменение содержимого заявки гостем (редактирование описания/категории)
+            // Изменение содержимого заявки гостем
             patch("/api/tickets/{id}") {
                 val ticketId = call.parameters["id"]?.toIntOrNull()
                     ?: return@patch call.respond(HttpStatusCode.BadRequest, "Invalid ticket ID")

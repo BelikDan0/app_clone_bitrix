@@ -9,6 +9,13 @@ data class LoginRequest(val type: String, val identifier: String, val password: 
 data class AuthResponse(val token: String, val role: String, val guestId: Int? = null)
 
 @Serializable
+data class CreateGuestRequest(
+    val fullName: String,
+    val phone: String,
+    val roomNumber: String
+)
+
+@Serializable
 data class CreateTicketRequest(val categoryId: Int, val description: String)
 
 @Serializable
