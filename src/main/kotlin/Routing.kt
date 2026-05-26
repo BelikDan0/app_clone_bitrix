@@ -141,11 +141,9 @@ fun Application.configureRouting() {
                         AuthResponse(token = token, role = "GUEST", guestId = guestId)
                     } else null
                 } else {
-                    val staff = Staff.selectAll().where {
-                        (Staff.username eq req.identifier) and (Staff.passwordHash eq (req.password ?: ""))
-                    }.firstOrNull()
+                    val staff = Staff.selectAll().where { Staff.username eq req.identifier }.firstOrNull()
 
-                    if (staff != null) {
+                    if (staff != null && PasswordHasher.verify(req.password ?: "", staff[Staff.passwordHash])) {
                         val staffId = staff[Staff.id]
                         val staffRole = staff[Staff.role]
                         val token = JWT.create()
@@ -258,22 +256,35 @@ fun Application.configureRouting() {
             }
 
             // ---------- Сотрудники (админ) ----------
-            get("/api/admin/staff") {
-                val principal = call.principal<JWTPrincipal>()
-                val role = principal?.payload?.getClaim("role")?.asString()
-                if (role != "ADMIN") {
-                    return@get call.respond(HttpStatusCode.Forbidden, "Only admin can view staff")
-                }
-                val staffList = transaction {
-                    Staff.selectAll().map { row ->
-                        StaffResponse(
-                            id = row[Staff.id],
-                            username = row[Staff.username],
-                            role = row[Staff.role]
-                        )
+            post("/api/admin/staff") {
+                try {
+                    val body = call.receiveText()
+                    val req = jsonWorker.decodeFromString<CreateStaffRequest>(body)
+
+                    val exists = transaction {
+                        Staff.selectAll().where { Staff.username eq req.username }.firstOrNull()
                     }
+
+                    if (exists != null) {
+                        call.respond(HttpStatusCode.Conflict, "User already exists")
+                        return@post
+                    }
+
+                    // Хешируем пароль перед сохранением
+                    val hashedPassword = PasswordHasher.hash(req.password)
+
+                    transaction {
+                        Staff.insert {
+                            it[Staff.username] = req.username
+                            it[Staff.passwordHash] = hashedPassword
+                            it[Staff.role] = req.role
+                        }
+                    }
+
+                    call.respond(HttpStatusCode.Created, mapOf("message" to "Staff created successfully"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, "Invalid request: ${e.message}")
                 }
-                call.respond(staffList)
             }
 
             put("/api/admin/staff/{id}") {

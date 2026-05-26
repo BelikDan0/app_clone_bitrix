@@ -40,4 +40,5 @@ dependencies {
     implementation("org.jetbrains.exposed:exposed-jdbc:0.47.0")
     implementation("io.ktor:ktor-server-auth:2.3.12")
     implementation("io.ktor:ktor-server-auth-jwt:2.3.12")
+    implementation("at.favre.lib:bcrypt:0.9.0")
 }
